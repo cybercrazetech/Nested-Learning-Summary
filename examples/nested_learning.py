@@ -4,6 +4,15 @@ The goal is to mirror the paper's structure: a fast associative memory
 (inner optimization problem) nested inside a slower task model (outer
 optimization problem). The fast memory adapts on every batch, while the
 outer model updates more slowly.
+
+Compared with a Transformer block (which only updates weights through the
+optimizer), this sketch:
+- Adds a *fast* key/value memory that is updated inside the forward pass.
+- Lets the slow path read the compressed representation produced by that
+  fast memory before computing its own prediction.
+- Tracks both fast- and slow-level losses so you can balance them during
+  training, similar in spirit to Titans/HOPE where self-modification is
+  exposed as an inner loop.
 """
 from __future__ import annotations
 
@@ -29,7 +38,7 @@ class FastAssociativeMemory(nn.Module):
         self.key_proj = nn.Linear(hidden_size, hidden_size, bias=False)
         self.value_proj = nn.Linear(hidden_size, hidden_size, bias=False)
 
-    def forward(self, hidden: Tensor) -> Tensor:
+    def forward(self, hidden: Tensor) -> Tuple[Tensor, Tensor]:
         keys = self.key_proj(hidden)
         values = self.value_proj(hidden)
         return keys, values
@@ -46,7 +55,13 @@ class FastAssociativeMemory(nn.Module):
 
 
 class NestedLearningBlock(nn.Module):
-    """Combines slow parameters with a fast memory update."""
+    """Combines slow parameters with a fast memory update.
+
+    The forward pass explicitly calls the fast-level update (similar to
+    how Titans/HOPE allow self-modification), and then the slower head
+    consumes the updated representation. This keeps the implementation
+    close to a Transformer block while exposing the nested-learning idea.
+    """
 
     def __init__(self, input_size: int, hidden_size: int) -> None:
         super().__init__()
@@ -55,10 +70,13 @@ class NestedLearningBlock(nn.Module):
         self.head = nn.Linear(hidden_size, 1)
 
     def forward(self, x: Tensor) -> Tuple[Tensor, Tensor]:
+        # (1) Encode inputs (analogous to a Transformer MLP/attention mix).
         hidden = torch.tanh(self.encoder(x))
-        # Fast level adapts on the current context flow.
+
+        # (2) Fast level adapts on the current context flow (token-level).
         fast_loss = self.fast_memory.fast_step(hidden)
-        # Slow level consumes the fast-memory-compressed representation.
+
+        # (3) Slow level consumes the fast-memory-compressed representation.
         keys, values = self.fast_memory(hidden)
         combined = hidden + 0.5 * (keys + values)
         output = self.head(combined)
@@ -91,6 +109,8 @@ def train_nested_learner(config: TrainingConfig = TrainingConfig()) -> None:
         outer_opt.zero_grad()
         pred, fast_loss = model(x)
         slow_loss = F.mse_loss(pred, y)
+
+        # Weighted blend mirrors how HOPE balances fast and slow objectives.
         total_loss = slow_loss + 0.1 * fast_loss
         total_loss.backward()
         outer_opt.step()
