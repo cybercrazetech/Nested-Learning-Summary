@@ -6,4 +6,4 @@ This repository collects study notes and runnable sketches about the research pa
 - A breakdown of experimental highlights and the HOPE architecture introduced in the paper.
 - Minimal PyTorch-style code to illustrate how nested optimization levels can be implemented.
 
-See `notes/overview.md` for the detailed write-up and `examples/nested_learning.py` for the code sketch.
+See `notes/overview.md` for the detailed write-up, `examples/nested_learning.py` for the conceptual sketch, and `src/` for a from-scratch PyTorch implementation of the HOPE model and training configuration inspired by the official Nested Learning reference code.
